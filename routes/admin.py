@@ -135,9 +135,20 @@ def delete_user(userId: str):
     r = admin_only()
     if r:
         return r
+    
+    # Convert userId to ObjectId
+    try:
+        obj_id = ObjectId(userId)
+    except errors.InvalidId:
+        return jsonify({
+            "message": "Invalid user ID",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
 
     # Check if user exists
-    user = db.users.find_one({"_id": userId})
+    user = db.users.find_one({"_id": obj_id})
     if not user:
         return jsonify({
             "message": "User not found",
@@ -146,7 +157,7 @@ def delete_user(userId: str):
         }), 404
 
     current_user_id = get_jwt_identity()
-    if str(current_user_id) == str(userId):
+    if str(current_user_id) == str(obj_id):
         return jsonify({
             "message": "Admins cannot delete themselves",
             "statusCode": 400,
@@ -154,7 +165,7 @@ def delete_user(userId: str):
         }), 400
 
     # Delete user
-    db.users.delete_one({"_id": userId})
+    db.users.delete_one({"_id": obj_id})
 
     return jsonify({
         "message": "User deleted successfully",
