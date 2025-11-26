@@ -1,17 +1,17 @@
-from beanie import Document
 from pydantic import Field
 from datetime import datetime
 from enum import Enum
 from typing import Optional
+from models.schema import BaseMongoModel
 
-class DB(Document):
+class CreateDBSchema(BaseMongoModel):
     name: str
     short_code: str
     description: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
-class Personnel(Document):
+class Personnel(BaseMongoModel):
     first_name: str
     last_name: str
     middle_name: str

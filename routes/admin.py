@@ -2,13 +2,12 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from core.security import hash_password
 from models.schema import CreateUserSchema, Role
-import secrets
+from models.personnel import CreateDBSchema
 from pydantic import ValidationError
 from core.db import db
 from bson import ObjectId, errors
 
 admin_bp = Blueprint("admin", __name__)
-
 
 def admin_only():
     claims = get_jwt()
@@ -17,22 +16,22 @@ def admin_only():
             "message": "Unauthorized access - Admin only",
             "data": {}
         }), 403
+        
 
 @admin_bp.post("/users")
 @jwt_required()
 def create_user():
-    # Check if current user is admin
+    # Admin check
     r = admin_only()
     if r:
         return r
 
-    # Get request JSON
     data = request.get_json()
 
-    # Force role to user
+    # Force role to user 
     data["role"] = Role.user.value
 
-    # Check if army_number already exists
+    # Check duplicate army_number
     if db.users.find_one({"army_number": data.get("army_number")}):
         return jsonify({
             "message": "User already exists",
@@ -40,13 +39,37 @@ def create_user():
             "data": {}
         }), 400
 
-    # Generate random password
-    hashed_password = hash_password(data['password'])
+    # Validate allowed_dbs
+    allowed = data.get("allowed_dbs", [])
 
-    # Combine input data with hashed password
+    if not isinstance(allowed, list):
+        return jsonify({
+            "message": "allowed_dbs must be a list",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
+    # Ensure every short_code exists
+    existing_short_codes = {
+        d["short_code"] for d in db.dbs.find({}, {"short_code": 1})
+    }
+
+    invalid = [code for code in allowed if code not in existing_short_codes]
+
+    if invalid:
+        return jsonify({
+            "message": "Invalid DB short_codes",
+            "statusCode": 400,
+            "data": {"invalid": invalid}
+        }), 400
+
+    # Hash password
+    hashed_password = hash_password(data["password"])
+
+    # Add hash
     user_data = {**data, "password_hash": hashed_password}
 
-    # Validate input with Pydantic
+    # Pydantic validation
     try:
         user_schema = CreateUserSchema(**user_data)
     except ValidationError as e:
@@ -57,14 +80,14 @@ def create_user():
         }), 400
 
     # Insert into MongoDB
-    result = db.users.insert_one(user_schema.dict())
+    result = db.users.insert_one(
+        user_schema.dict(by_alias=True, exclude_none=True)
+    )
 
     return jsonify({
         "message": "User created successfully",
         "statusCode": 201,
-        "data": {
-            "id": str(result.inserted_id)
-        }
+        "data": {"id": str(result.inserted_id)}
     }), 201
 
 
@@ -76,55 +99,61 @@ def update_user(userId: str):
     if r:
         return r
 
-    # Convert userId to ObjectId
     try:
         obj_id = ObjectId(userId)
     except errors.InvalidId:
-        return jsonify({
-            "message": "Invalid user ID",
-            "statusCode": 400,
-            "data": {}
-        }), 400
+        return jsonify({"message": "Invalid user ID", "statusCode": 400}), 400
 
-    # Fetch the user
     user = db.users.find_one({"_id": obj_id})
     if not user:
-        return jsonify({
-            "message": "User not found",
-            "statusCode": 404,
-            "data": {}
-        }), 404
+        return jsonify({"message": "User not found", "statusCode": 404}), 404
 
-    # Get input data
     data = request.get_json() or {}
 
-    # Prevent changing immutable fields
-    for field in ["role", "password_hash", "_id", "army_number", "access_all_db", "created_at"]:
+    # Remove forbidden update fields
+    for field in ["_id", "role", "password_hash", "access_all_db", "army_number", "created_at"]:
         data.pop(field, None)
 
-    # Merge existing user with updates
+    # Validate allowed_dbs if included
+    if "allowed_dbs" in data:
+        if not isinstance(data["allowed_dbs"], list):
+            return jsonify({
+                "message": "allowed_dbs must be a list",
+                "statusCode": 400
+            }), 400
+
+        existing_short_codes = {
+            d["short_code"] for d in db.dbs.find({}, {"short_code": 1})
+        }
+
+        invalid = [code for code in data["allowed_dbs"] if code not in existing_short_codes]
+
+        if invalid:
+            return jsonify({
+                "message": "Invalid DB codes in allowed_dbs",
+                "statusCode": 400,
+                "data": {"invalid": invalid}
+            }), 400
+
+    # Merge updates
     updated_data = {**user, **data}
 
-    # Validate using Pydantic
+    # Validate with Pydantic
     try:
-        user_schema = CreateUserSchema(**updated_data)
+        validated = CreateUserSchema(**updated_data)
     except ValidationError as e:
-        return jsonify({
-            "message": e.errors(),
-            "statusCode": 400,
-            "data": {}
-        }), 400
+        return jsonify({"message": e.errors(), "statusCode": 400}), 400
 
-    # Update in MongoDB
+    # Update
     db.users.update_one(
         {"_id": obj_id},
-        {"$set": user_schema.dict(exclude={"password_hash"})}
+        {"$set": validated.dict(by_alias=True, exclude_none=True, exclude={"password_hash"})}
     )
 
     return jsonify({
         "message": "User updated successfully",
         "statusCode": 200,
-        "data": user_schema.dict(by_alias=False, exclude={"password_hash", "created_at"})
+        "data": validated.dict(by_alias=False, exclude={"password_hash"})
     }), 200
 
 
@@ -191,10 +220,136 @@ def get_all_users():
                 exclude={"password_hash", "created_at"},
                 by_alias=False
             )
-)
+        )
 
     return jsonify({
         "message": "Users fetched successfully",
         "statusCode": 200,
         "data": clean_users
+    }), 200
+
+
+@admin_bp.post("dbs")
+@jwt_required()
+def create_db():
+     # Check if current user is admin
+    r = admin_only()
+    if r:
+        return r
+
+    # Get request JSON
+    data = request.get_json()
+
+    # Check if db already exists
+    if db.dbs.find_one({"short_code": data.get("short_code")}):
+        return jsonify({
+            "message": "Database already exists",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+    
+        # Validate input with Pydantic
+    try:
+        db_schema = CreateDBSchema(**data)
+    except ValidationError as e:
+        return jsonify({
+            "message": e.errors(),
+            "statusCode": 400,
+            "data": {}
+        }), 400
+    
+    db_dict = db_schema.dict(by_alias=True, exclude_none=True)
+
+    # Insert into MongoDB
+    db.dbs.insert_one(db_dict)
+
+    return jsonify({
+        "message": "Database created successfully",
+        "statusCode": 201,
+        "data": {}
+    }), 201
+
+
+@admin_bp.get("/dbs")
+@jwt_required()
+def get_all_dbs():
+    dbs = list(db.dbs.find())
+
+    clean_dbs = []
+    for item in dbs:
+        clean_dbs.append(
+            CreateDBSchema(**item).dict(
+                exclude={"created_at"},
+                by_alias=False
+            )
+        )
+
+    return jsonify({
+        "message": "Database fetched successfully",
+        "statusCode": 200,
+        "data": clean_dbs
+    }), 200
+
+@admin_bp.patch("/dbs/<dbId>")
+@jwt_required()
+def update_db(dbId: str):
+    # Admin check
+    r = admin_only()
+    if r:
+        return r
+
+    try:
+        obj_id = ObjectId(dbId)
+    except errors.InvalidId:
+        return jsonify({
+            "message": "Invalid database ID",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
+    # Fetch the db
+    database = db.dbs.find_one({"_id": obj_id})
+    if not database:
+        return jsonify({
+            "message": "Database not found",
+            "statusCode": 404,
+            "data": {}
+        }), 404
+
+    # Get input data
+    data = request.get_json() or {}
+
+    # Prevent changing immutable fields
+    for field in ["_id", "created_at"]:
+        data.pop(field, None)
+
+    # Merge existing db with updates
+    updated_data = {**database, **data}
+
+    # Validate using Pydantic
+    try:
+        db_schema = CreateDBSchema(**updated_data)
+    except ValidationError as e:
+        return jsonify({
+            "message": e.errors(),
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
+    # Update in MongoDB
+    update_dict = db_schema.dict(
+        exclude={"created_at", "id"},
+        by_alias=True,
+        exclude_none=True
+    )
+
+    db.dbs.update_one(
+        {"_id": obj_id},
+        {"$set": update_dict}
+    )
+
+    return jsonify({
+        "message": "Database updated successfully",
+        "statusCode": 200,
+        "data": db_schema.dict(by_alias=False, exclude={"created_at"})
     }), 200
