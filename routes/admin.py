@@ -1,11 +1,11 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt
+from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from core.security import hash_password
 from models.schema import CreateUserSchema, Role
 import secrets
 from pydantic import ValidationError
 from core.db import db
-from bson import ObjectId
+from bson import ObjectId, errors
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -41,8 +41,7 @@ def create_user():
         }), 400
 
     # Generate random password
-    gen_pass = secrets.token_urlsafe(8)
-    hashed_password = hash_password(gen_pass)
+    hashed_password = hash_password(data['password'])
 
     # Combine input data with hashed password
     user_data = {**data, "password_hash": hashed_password}
@@ -64,23 +63,31 @@ def create_user():
         "message": "User created successfully",
         "statusCode": 201,
         "data": {
-            "generated_password": gen_pass,
             "id": str(result.inserted_id)
         }
     }), 201
 
 
-@admin_bp.put("/users/<userId>")
+@admin_bp.patch("/users/<userId>")
 @jwt_required()
 def update_user(userId: str):
-    print("-----", userId, "-----")
     # Admin check
     r = admin_only()
     if r:
         return r
 
-    # Find the user
-    user = db.users.find_one({"_id": userId})
+    # Convert userId to ObjectId
+    try:
+        obj_id = ObjectId(userId)
+    except errors.InvalidId:
+        return jsonify({
+            "message": "Invalid user ID",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
+    # Fetch the user
+    user = db.users.find_one({"_id": obj_id})
     if not user:
         return jsonify({
             "message": "User not found",
@@ -92,13 +99,10 @@ def update_user(userId: str):
     data = request.get_json() or {}
 
     # Prevent changing immutable fields
-    data.pop("role", None)
-    data.pop("password_hash", None)
-    data.pop("_id", None)
-    data.pop("army_number", None)
-    data.pop("access_all_db", None)
+    for field in ["role", "password_hash", "_id", "army_number", "access_all_db", "created_at"]:
+        data.pop(field, None)
 
-    # Merge existing data with updates
+    # Merge existing user with updates
     updated_data = {**user, **data}
 
     # Validate using Pydantic
@@ -111,14 +115,75 @@ def update_user(userId: str):
             "data": {}
         }), 400
 
-    # Update in MongoDB (excluding password_hash)
+    # Update in MongoDB
     db.users.update_one(
-        {"_id": userId},
+        {"_id": obj_id},
         {"$set": user_schema.dict(exclude={"password_hash"})}
     )
 
     return jsonify({
         "message": "User updated successfully",
         "statusCode": 200,
-        "data": { **updated_data }
+        "data": user_schema.dict(by_alias=False, exclude={"password_hash", "created_at"})
+    }), 200
+
+
+@admin_bp.delete("/users/<userId>")
+@jwt_required()
+def delete_user(userId: str):
+    # Admin check
+    r = admin_only()
+    if r:
+        return r
+
+    # Check if user exists
+    user = db.users.find_one({"_id": userId})
+    if not user:
+        return jsonify({
+            "message": "User not found",
+            "statusCode": 404,
+            "data": {}
+        }), 404
+
+    current_user_id = get_jwt_identity()
+    if str(current_user_id) == str(userId):
+        return jsonify({
+            "message": "Admins cannot delete themselves",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
+    # Delete user
+    db.users.delete_one({"_id": userId})
+
+    return jsonify({
+        "message": "User deleted successfully",
+        "statusCode": 200,
+        "data": {}
+    }), 200
+
+
+@admin_bp.get("/users")
+@jwt_required()
+def get_all_users():
+    # Admin check
+    r = admin_only()
+    if r:
+        return r
+
+    users = list(db.users.find({"role": {"$ne": "admin"}}))
+
+    clean_users = []
+    for user in users:
+        clean_users.append(
+            CreateUserSchema(**user).dict(
+                exclude={"password_hash", "created_at"},
+                by_alias=False
+            )
+)
+
+    return jsonify({
+        "message": "Users fetched successfully",
+        "statusCode": 200,
+        "data": clean_users
     }), 200

@@ -46,8 +46,12 @@ def login():
     )
 
     user_schema = CreateUserSchema(**user)
-    user_data = user_schema.dict(exclude={"password_hash"})
-    user_data = user_schema.dict(exclude={"created_at"})
+
+    user_data = user_schema.dict(
+        exclude={"password_hash", "created_at"},
+        by_alias=False
+    )
+    user_data["id"] = str(user_data["id"])
 
     return {
         "message": "Login successfully",
