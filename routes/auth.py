@@ -2,7 +2,7 @@ from flask import Blueprint, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from core.db import db
 from core.security import verify_password, hash_password
-from models.schema import LoginSchema, ChangePasswordSchema, CreateUserSchema
+from models.schema import LoginSchema, ChangePasswordSchema, CreateAdminSchema, Role
 from bson import ObjectId
 from pydantic import ValidationError
 
@@ -45,13 +45,16 @@ def login():
         }
     )
 
-    user_schema = CreateUserSchema(**user)
+    user_schema = CreateAdminSchema(**user)
 
     user_data = user_schema.dict(
         exclude={"password_hash", "created_at"},
         by_alias=False
     )
     user_data["id"] = str(user_data["id"])
+
+    if user_data['role'] != Role.admin.value:
+        user_data.pop('access_all_db')
 
     return {
         "message": "Login successfully",
