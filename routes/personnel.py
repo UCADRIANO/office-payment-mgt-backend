@@ -187,3 +187,26 @@ def delete_personnel(personnelId):
         "message": "Personnel deleted successfully",
         "statusCode": 200
     }), 200
+
+
+@personnel_bp.get("/")
+@jwt_required()
+def get_personnel_by_db():
+    db_id = request.args.get("db_id")
+
+    query = {}
+    if db_id:
+        query["db_id"] = db_id
+
+    personnel_list = list(db.personnel.find(query))
+
+    clean_personnel = [
+        Personnel(**item).dict(exclude={"created_at"}, by_alias=False)
+        for item in personnel_list
+    ]
+
+    return jsonify({
+        "message": "Personnel fetched successfully",
+        "statusCode": 200,
+        "data": clean_personnel
+    }), 200
