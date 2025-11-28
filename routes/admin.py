@@ -135,7 +135,7 @@ def update_user(userId: str):
 
     # Convert string IDs in request to ObjectIds
     try:
-        requested_ids = [ObjectId(dbid) for dbid in data["allowed_dbs"]]
+        requested_ids = [str(dbid) for dbid in data["allowed_dbs"]]
     except Exception:
         return jsonify({
             "message": "One or more allowed_dbs values are not valid ObjectIds",
@@ -143,10 +143,10 @@ def update_user(userId: str):
         }), 400
 
     # Fetch all valid DB IDs
-    existing_ids = {d["_id"] for d in db.dbs.find({}, {"_id": 1})}
+    existing_ids = {str(d["_id"]) for d in db.dbs.find({}, {"_id": 1})}
 
     # Compare
-    invalid = [str(id_) for id_ in requested_ids if id_ not in existing_ids]
+    invalid = [str(id) for id in requested_ids if id not in existing_ids]
 
     if invalid:
         return jsonify({
