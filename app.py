@@ -5,6 +5,7 @@ from flask_jwt_extended import JWTManager
 from core.config import settings
 from routes.auth import auth_bp
 from routes.admin import admin_bp
+from routes.personnel import personnel_bp
 
 app = Flask(__name__)
 app.config["JWT_SECRET_KEY"] = settings.JWT_SECRET
@@ -16,6 +17,7 @@ jwt = JWTManager(app)
 
 app.register_blueprint(auth_bp, url_prefix="/auth")
 app.register_blueprint(admin_bp, url_prefix="/admin")
+app.register_blueprint(personnel_bp, url_prefix="/personnels")
 
 @app.route("/")
 def home():

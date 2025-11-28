@@ -28,7 +28,7 @@ def create_user():
 
     data = request.get_json()
 
-    # Force role to user 
+    # Force role to user
     data["role"] = Role.user.value
 
     # Check duplicate army_number
@@ -39,7 +39,7 @@ def create_user():
             "data": {}
         }), 400
 
-    # Validate allowed_dbs
+    # Validate allowed_dbs (now using DB IDs)
     allowed = data.get("allowed_dbs", [])
 
     if not isinstance(allowed, list):
@@ -49,29 +49,40 @@ def create_user():
             "data": {}
         }), 400
 
-    # Ensure every short_code exists
-    existing_short_codes = {
-        d["short_code"] for d in db.dbs.find({}, {"short_code": 1})
-    }
+    validated_db_ids = []
 
-    invalid = [code for code in allowed if code not in existing_short_codes]
+    for db_id in allowed:
+        # Ensure valid ObjectId
+        try:
+            obj_id = ObjectId(db_id)
+        except:
+            return jsonify({
+                "message": "Invalid DB ID format",
+                "statusCode": 400,
+                "data": {"invalid": db_id}
+            }), 400
 
-    if invalid:
-        return jsonify({
-            "message": "Invalid DB short_codes",
-            "statusCode": 400,
-            "data": {"invalid": invalid}
-        }), 400
+        # Ensure the DB exists
+        if not db.dbs.find_one({"_id": obj_id}):
+            return jsonify({
+                "message": "Database not found",
+                "statusCode": 404,
+                "data": {"invalid": db_id}
+            }), 404
+
+        # Store DB id as string (schema expects List[str])
+        validated_db_ids.append(db_id)
+
+    # Replace allowed_dbs with validated list
+    data["allowed_dbs"] = validated_db_ids
 
     # Hash password
     hashed_password = hash_password(data["password"])
-
-    # Add hash
-    user_data = {**data, "password_hash": hashed_password}
+    data["password_hash"] = hashed_password
 
     # Pydantic validation
     try:
-        user_schema = CreateUserSchema(**user_data)
+        user_schema = CreateUserSchema(**data)
     except ValidationError as e:
         return jsonify({
             "message": e.errors(),
@@ -122,21 +133,40 @@ def update_user(userId: str):
                 "statusCode": 400
             }), 400
 
-        existing_short_codes = {
-            d["short_code"] for d in db.dbs.find({}, {"short_code": 1})
-        }
+    # Convert string IDs in request to ObjectIds
+    try:
+        requested_ids = [ObjectId(dbid) for dbid in data["allowed_dbs"]]
+    except Exception:
+        return jsonify({
+            "message": "One or more allowed_dbs values are not valid ObjectIds",
+            "statusCode": 400
+        }), 400
 
-        invalid = [code for code in data["allowed_dbs"] if code not in existing_short_codes]
+    # Fetch all valid DB IDs
+    existing_ids = {d["_id"] for d in db.dbs.find({}, {"_id": 1})}
 
-        if invalid:
-            return jsonify({
-                "message": "Invalid DB codes in allowed_dbs",
-                "statusCode": 400,
-                "data": {"invalid": invalid}
-            }), 400
+    # Compare
+    invalid = [str(id_) for id_ in requested_ids if id_ not in existing_ids]
+
+    if invalid:
+        return jsonify({
+            "message": "Invalid DB IDs in allowed_dbs",
+            "statusCode": 400,
+            "data": {"invalid": invalid}
+        }), 400
+
+    # Replace string IDs with ObjectIds for storage
+    data["allowed_dbs"] = requested_ids
+
 
     # Merge updates
-    updated_data = {**user, **data}
+    user_json = {
+        **user,
+        "_id": str(user["_id"]),
+        "allowed_dbs": [str(i) for i in user.get("allowed_dbs", [])]
+    }
+
+    updated_data = {**user_json, **data}
 
     # Validate with Pydantic
     try:
@@ -147,13 +177,13 @@ def update_user(userId: str):
     # Update
     db.users.update_one(
         {"_id": obj_id},
-        {"$set": validated.dict(by_alias=True, exclude_none=True, exclude={"password_hash"})}
+        {"$set": validated.dict(by_alias=False, exclude_none=True, exclude={"password_hash"})}
     )
 
     return jsonify({
         "message": "User updated successfully",
         "statusCode": 200,
-        "data": validated.dict(by_alias=False, exclude={"password_hash"})
+        "data": {}
     }), 200
 
 
@@ -352,4 +382,48 @@ def update_db(dbId: str):
         "message": "Database updated successfully",
         "statusCode": 200,
         "data": db_schema.dict(by_alias=False, exclude={"created_at"})
+    }), 200
+
+
+@admin_bp.delete("/dbs/<dbId>")
+@jwt_required()
+def delete_db(dbId: str):
+    # Admin check
+    r = admin_only()
+    if r:
+        return r
+    
+    # Convert to ObjectId
+    try:
+        obj_id = ObjectId(dbId)
+    except errors.InvalidId:
+        return jsonify({
+            "message": "Invalid database ID",
+            "statusCode": 400,
+            "data": {}
+        }), 400
+
+    # Check if DB exists
+    database = db.dbs.find_one({"_id": obj_id})
+    if not database:
+        return jsonify({
+            "message": "Database not found",
+            "statusCode": 404,
+            "data": {}
+        }), 404
+
+    db.dbs.delete_one({"_id": obj_id})
+
+    # Delete all personnel belonging to this DB
+    db.personnel.delete_many({"db_id": dbId})
+
+    db.users.update_many(
+        {},
+        {"$pull": {"allowed_dbs": dbId}}
+    )
+
+    return jsonify({
+        "message": "Database deleted successfully",
+        "statusCode": 200,
+        "data": {}
     }), 200
