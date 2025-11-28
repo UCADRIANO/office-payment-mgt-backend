@@ -192,7 +192,9 @@ def delete_personnel(personnelId):
 @personnel_bp.get("/db/<db_id>")
 @jwt_required()
 def get_personnel_by_db(db_id):
-    personnel_list = list(db.personnel.find({"db_id": db_id}))
+    personnel_list = list(db.personnels.find({"db_id": db_id}))
+
+    print(f"personnel_list, {personnel_list}")
 
     clean_personnel = [
         Personnel(**item).dict(exclude={"created_at"}, by_alias=False)
