@@ -9,6 +9,7 @@ from bson import ObjectId, errors
 
 admin_bp = Blueprint("admin", __name__)
 
+
 def admin_only():
     claims = get_jwt()
     if claims.get("role") != Role.admin.value:
@@ -16,7 +17,7 @@ def admin_only():
             "message": "Unauthorized access - Admin only",
             "data": {}
         }), 403
-        
+
 
 @admin_bp.post("/users")
 @jwt_required()
@@ -159,7 +160,6 @@ def update_user(userId: str):
     # Replace string IDs with ObjectIds for storage
     data["allowed_dbs"] = requested_ids
 
-
     # Merge updates
     user_json = {
         **user,
@@ -178,7 +178,8 @@ def update_user(userId: str):
     # Update
     db.users.update_one(
         {"_id": obj_id},
-        {"$set": validated.dict(by_alias=False, exclude_none=True, exclude={"password_hash"})}
+        {"$set": validated.dict(
+            by_alias=False, exclude_none=True, exclude={"password_hash"})}
     )
 
     return jsonify({
@@ -195,7 +196,7 @@ def delete_user(userId: str):
     r = admin_only()
     if r:
         return r
-    
+
     # Convert userId to ObjectId
     try:
         obj_id = ObjectId(userId)
@@ -205,7 +206,6 @@ def delete_user(userId: str):
             "statusCode": 400,
             "data": {}
         }), 400
-
 
     # Check if user exists
     user = db.users.find_one({"_id": obj_id})
@@ -257,7 +257,8 @@ def get_all_users():
             db_docs = list(db.dbs.find({"_id": {"$in": object_ids}}))
 
             full_dbs = [
-                CreateDBSchema(**db_doc).dict(by_alias=False, exclude={"created_at"})
+                CreateDBSchema(**db_doc).dict(by_alias=False,
+                                              exclude={"created_at"})
                 for db_doc in db_docs
             ]
 
@@ -279,11 +280,10 @@ def get_all_users():
     }), 200
 
 
-
 @admin_bp.post("dbs")
 @jwt_required()
 def create_db():
-     # Check if current user is admin
+    # Check if current user is admin
     r = admin_only()
     if r:
         return r
@@ -298,7 +298,7 @@ def create_db():
             "statusCode": 400,
             "data": {}
         }), 400
-    
+
         # Validate input with Pydantic
     try:
         db_schema = CreateDBSchema(**data)
@@ -308,7 +308,7 @@ def create_db():
             "statusCode": 400,
             "data": {}
         }), 400
-    
+
     db_dict = db_schema.dict(by_alias=True, exclude_none=True)
 
     # Insert into MongoDB
@@ -324,7 +324,28 @@ def create_db():
 @admin_bp.get("/dbs")
 @jwt_required()
 def get_all_dbs():
-    dbs = list(db.dbs.find())
+    # Get current user
+    current_user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(current_user_id)})
+
+    if not user:
+        return jsonify({
+            "message": "User not found",
+            "statusCode": 404,
+            "data": {}
+        }), 404
+
+    # If user is admin, return all databases
+    if user.get("role") == Role.admin.value:
+        dbs = list(db.dbs.find())
+    else:
+        # For non-admin users, filter databases based on allowed_dbs
+        allowed_db_ids = user.get("allowed_dbs", [])
+        if allowed_db_ids:
+            object_ids = [ObjectId(db_id) for db_id in allowed_db_ids]
+            dbs = list(db.dbs.find({"_id": {"$in": object_ids}}))
+        else:
+            dbs = []
 
     clean_dbs = []
     for item in dbs:
@@ -340,6 +361,7 @@ def get_all_dbs():
         "statusCode": 200,
         "data": clean_dbs
     }), 200
+
 
 @admin_bp.patch("/dbs/<dbId>")
 @jwt_required()
@@ -413,7 +435,7 @@ def delete_db(dbId: str):
     r = admin_only()
     if r:
         return r
-    
+
     # Convert to ObjectId
     try:
         obj_id = ObjectId(dbId)
