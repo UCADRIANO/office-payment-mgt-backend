@@ -3,10 +3,12 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from core.db import db
 from core.security import verify_password, hash_password
 from models.schema import LoginSchema, ChangePasswordSchema, CreateAdminSchema, Role, CreateUserSchema
+from models.personnel import CreateDBSchema
 from bson import ObjectId
 from pydantic import ValidationError
 
 auth_bp = Blueprint("auth", __name__)
+
 
 @auth_bp.post("/login")
 def login():
@@ -14,27 +16,26 @@ def login():
         data = LoginSchema(**request.get_json())
     except ValidationError as e:
         return {
-            "message": e.errors(), 
-            "statusCode": 400, 
+            "message": e.errors(),
+            "statusCode": 400,
             "data": {}
         }, 400
 
     user = db.users.find_one({"army_number": data.army_number})
     if not user:
         return {
-            "message": "Invalid credentials", 
-            "statusCode": 401, 
+            "message": "Invalid credentials",
+            "statusCode": 401,
             "data": {}
         }, 401
 
     user = db.users.find_one({"army_number": data.army_number})
     if not user or not verify_password(data.password, user["password_hash"]):
         return {
-            "message": "Invalid credentials", 
+            "message": "Invalid credentials",
             "statusCode": 401,
             "data": {}
         }, 401
-
 
     token = create_access_token(
         identity=str(user["_id"]),
@@ -58,6 +59,22 @@ def login():
     )
     user_data["id"] = str(user_data["id"])
 
+    # Populate allowed_dbs with full DB details
+    if user_data.get("allowed_dbs"):
+        object_ids = [ObjectId(db_id) for db_id in user_data["allowed_dbs"]]
+
+        db_docs = list(db.dbs.find({"_id": {"$in": object_ids}}))
+
+        full_dbs = [
+            CreateDBSchema(**db_doc).dict(by_alias=False,
+                                          exclude={"created_at"})
+            for db_doc in db_docs
+        ]
+
+        user_data["allowed_dbs"] = full_dbs
+    else:
+        user_data["allowed_dbs"] = []
+
     return {
         "message": "Login successfully",
         "statusCode": 200,
@@ -77,8 +94,8 @@ def change_password():
         data = ChangePasswordSchema(**request.get_json())
     except ValidationError as e:
         return {
-            "message": e.errors(), 
-            "statusCode": 400, 
+            "message": e.errors(),
+            "statusCode": 400,
             "data": {}
         }, 400
 
@@ -88,11 +105,11 @@ def change_password():
 
     if verify_password(data.old_password, user["password_hash"]) == False:
         return {
-            "message": "Old password incorrect",  
-            "statusCode": 404, 
+            "message": "Old password incorrect",
+            "statusCode": 404,
             "data": {}
         }, 404
-    
+
     db.users.update_one(
         {"_id": ObjectId(user_id)},
         {
@@ -105,6 +122,6 @@ def change_password():
 
     return {
         "message": "Password updated successfully",
-        "statusCode": 200, 
+        "statusCode": 200,
         "data": {}
     }
