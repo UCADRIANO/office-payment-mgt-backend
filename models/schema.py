@@ -31,8 +31,9 @@ class CreateUserSchema(BaseMongoModel):
     last_name: str
     army_number: str
     role: Role = Role.user
-    allowed_dbs: list[str] = []
+    allowed_dbs: list[Any] = Field(default_factory=list) 
     password_hash: Optional[str] = None
+    is_generated: Optional[bool] = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

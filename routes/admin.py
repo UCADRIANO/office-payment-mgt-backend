@@ -79,6 +79,7 @@ def create_user():
     # Hash password
     hashed_password = hash_password(data["password"])
     data["password_hash"] = hashed_password
+    data['is_generated'] = True
 
     # Pydantic validation
     try:
@@ -245,18 +246,38 @@ def get_all_users():
 
     clean_users = []
     for user in users:
-        clean_users.append(
-            CreateUserSchema(**user).dict(
-                exclude={"password_hash", "created_at"},
-                by_alias=False
-            )
+
+        user.pop("password_hash", None)
+        user.pop("created_at", None)
+
+        # Populate allowed_dbs with full DB details
+        if user.get("allowed_dbs"):
+            object_ids = [ObjectId(db_id) for db_id in user["allowed_dbs"]]
+
+            db_docs = list(db.dbs.find({"_id": {"$in": object_ids}}))
+
+            full_dbs = [
+                CreateDBSchema(**db_doc).dict(by_alias=False, exclude={"created_at"})
+                for db_doc in db_docs
+            ]
+
+            user["allowed_dbs"] = full_dbs
+        else:
+            user["allowed_dbs"] = []
+
+        clean_user = CreateUserSchema(**user).dict(
+            exclude={"password_hash", "created_at"},
+            by_alias=False
         )
+
+        clean_users.append(clean_user)
 
     return jsonify({
         "message": "Users fetched successfully",
         "statusCode": 200,
         "data": clean_users
     }), 200
+
 
 
 @admin_bp.post("dbs")
