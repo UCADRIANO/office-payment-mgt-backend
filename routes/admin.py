@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
 from core.security import hash_password
-from models.schema import CreateUserSchema, Role
+from models.schema import CreateUserSchema, Role, ResetPasswordSchema
 from models.personnel import CreateDBSchema
 from pydantic import ValidationError
 from core.db import db
@@ -470,3 +470,41 @@ def delete_db(dbId: str):
         "statusCode": 200,
         "data": {}
     }), 200
+
+
+@admin_bp.post("/reset-password")
+@jwt_required()
+def reset_password():
+    # Admin check
+    r = admin_only()
+    if r:
+        return r
+
+    try:
+        data = ResetPasswordSchema(**request.get_json())
+    except ValidationError as e:
+        return {
+            "message": e.errors(),
+            "statusCode": 400,
+            "data": {}
+        }, 400
+
+    user = db.users.find_one({"_id": ObjectId(data.user_id)})
+    if not user:
+        return {"message": "User not found", "statusCode": 404, "data": {}}, 404
+
+    db.users.update_one(
+        {"_id": ObjectId(data.user_id)},
+        {
+            "$set": {
+                "password_hash": hash_password(data.new_password),
+                "is_generated": True,
+            }
+        }
+    )
+
+    return {
+        "message": "Password reset successfully",
+        "statusCode": 200,
+        "data": {}
+    }

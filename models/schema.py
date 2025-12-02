@@ -50,3 +50,7 @@ class CreateAdminSchema(BaseMongoModel):
 class ChangePasswordSchema(BaseModel):
     old_password: str
     new_password: str
+
+class ResetPasswordSchema(BaseModel):
+    user_id: str
+    new_password: str

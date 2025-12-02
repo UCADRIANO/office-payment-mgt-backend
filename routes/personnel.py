@@ -204,3 +204,77 @@ def get_personnel_by_db(db_id):
         "statusCode": 200,
         "data": clean_personnel
     }), 200
+
+
+@personnel_bp.post("/upload")
+@jwt_required()
+def bulk_personnel_upload():
+    data = request.get_json()
+    
+    if not isinstance(data, list):
+        return jsonify({
+            "message": "Payload must be an array of Personnel",
+            "statusCode": 400
+        }), 400
+
+    # Extract db_id (must be same for all entries)
+    db_id = data[0].get("db_id")
+    if not db_id:
+        return jsonify({"message": "db_id is required", "statusCode": 400}), 400
+
+    # Validate DB ID format
+    try:
+        obj_id = ObjectId(db_id)
+    except:
+        return jsonify({"message": "Invalid db_id", "statusCode": 400}), 400
+
+    # Ensure DB exists
+    if not db.dbs.find_one({"_id": obj_id}):
+        return jsonify({"message": "DB not found", "statusCode": 404}), 404
+
+    valid_docs = []
+    errors = []
+
+    for index, item in enumerate(data):
+        # ensure db_id consistency
+        if item.get("db_id") != db_id:
+            errors.append({
+                "index": index,
+                "error": "db_id mismatch in item"
+            })
+            continue
+
+        # unique army_number per DB
+        if db.personnels.find_one({"army_number": item["army_number"], "db_id": db_id}):
+            errors.append({
+                "index": index,
+                "error": f"Personnel with army_number {item['army_number']} already exists"
+            })
+            continue
+
+        # Pydantic validation
+        try:
+            p = Personnel(**item)
+        except ValidationError as e:
+            errors.append({
+                "index": index,
+                "error": e.errors()
+            })
+            continue
+
+        doc = p.dict(by_alias=False)
+        doc.pop("_id", None)
+        valid_docs.append(doc)
+
+    # Insert valid docs
+    if valid_docs:
+        db.personnels.insert_many(valid_docs)
+
+    return jsonify({
+        "message": "Bulk upload completed",
+        "statusCode": 207 if errors else 201,
+        "data": {
+            "inserted": len(valid_docs),
+            "failed": errors
+        }
+    }), 207 if errors else 201
