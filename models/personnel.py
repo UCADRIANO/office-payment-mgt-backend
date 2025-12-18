@@ -14,6 +14,10 @@ class CreateDBSchema(BaseMongoModel):
     description: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class PersonnelStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
 
 class Personnel(BaseMongoModel):
     first_name: str
@@ -28,6 +32,8 @@ class Personnel(BaseMongoModel):
     location: Optional[str] = None
     remark: Optional[str] = None
     db_id: str 
+
+    status: PersonnelStatus = Field(default=PersonnelStatus.ACTIVE)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

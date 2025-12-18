@@ -6,6 +6,8 @@ from models.personnel import CreateDBSchema
 from pydantic import ValidationError
 from core.db import db
 from bson import ObjectId, errors
+from math import ceil
+
 
 admin_bp = Blueprint("admin", __name__)
 
@@ -234,6 +236,51 @@ def delete_user(userId: str):
     }), 200
 
 
+# @admin_bp.get("/users")
+# @jwt_required()
+# def get_all_users():
+#     # Admin check
+#     r = admin_only()
+#     if r:
+#         return r
+
+#     users = list(db.users.find({"role": {"$ne": "admin"}}))
+
+#     clean_users = []
+#     for user in users:
+
+#         user.pop("password_hash", None)
+#         user.pop("created_at", None)
+
+#         # Populate allowed_dbs with full DB details
+#         if user.get("allowed_dbs"):
+#             object_ids = [ObjectId(db_id) for db_id in user["allowed_dbs"]]
+
+#             db_docs = list(db.dbs.find({"_id": {"$in": object_ids}}))
+
+#             full_dbs = [
+#                 CreateDBSchema(**db_doc).dict(by_alias=False,
+#                                               exclude={"created_at"})
+#                 for db_doc in db_docs
+#             ]
+
+#             user["allowed_dbs"] = full_dbs
+#         else:
+#             user["allowed_dbs"] = []
+
+#         clean_user = CreateUserSchema(**user).dict(
+#             exclude={"password_hash", "created_at"},
+#             by_alias=False
+#         )
+
+#         clean_users.append(clean_user)
+
+#     return jsonify({
+#         "message": "Users fetched successfully",
+#         "statusCode": 200,
+#         "data": clean_users
+#     }), 200
+
 @admin_bp.get("/users")
 @jwt_required()
 def get_all_users():
@@ -242,42 +289,80 @@ def get_all_users():
     if r:
         return r
 
-    users = list(db.users.find({"role": {"$ne": "admin"}}))
+    # Pagination params
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 10))
+    search = request.args.get("search", "")
+
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 10
+
+    skip = (page - 1) * limit
+
+    # Build query
+    query = {"role": {"$ne": "admin"}}
+
+    if search:
+        query["$or"] = [
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"army_number": {"$regex": search, "$options": "i"}},
+        ]
+
+    # Count total users
+    total = db.users.count_documents(query)
+
+    # Fetch users with pagination
+    users = list(
+        db.users.find(query)
+        .skip(skip)
+        .limit(limit)
+    )
 
     clean_users = []
     for user in users:
-
         user.pop("password_hash", None)
         user.pop("created_at", None)
 
         # Populate allowed_dbs with full DB details
         if user.get("allowed_dbs"):
             object_ids = [ObjectId(db_id) for db_id in user["allowed_dbs"]]
-
             db_docs = list(db.dbs.find({"_id": {"$in": object_ids}}))
-
             full_dbs = [
-                CreateDBSchema(**db_doc).dict(by_alias=False,
-                                              exclude={"created_at"})
+                CreateDBSchema(**db_doc).dict(by_alias=False, exclude={"created_at"})
                 for db_doc in db_docs
             ]
-
             user["allowed_dbs"] = full_dbs
         else:
             user["allowed_dbs"] = []
 
         clean_user = CreateUserSchema(**user).dict(
-            exclude={"password_hash", "created_at"},
-            by_alias=False
+            exclude={"password_hash", "created_at"}, by_alias=False
         )
-
         clean_users.append(clean_user)
+
+    # Pagination metadata
+    page_count = ceil(total / limit) if total else 1
+    pagination = {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pageCount": page_count,
+        "hasNextPage": page < page_count,
+        "hasPrevPage": page > 1,
+    }
 
     return jsonify({
         "message": "Users fetched successfully",
         "statusCode": 200,
-        "data": clean_users
+        "data": {
+            "data": clean_users,
+            "meta": pagination
+        },
     }), 200
+
 
 
 @admin_bp.post("dbs")
@@ -321,10 +406,54 @@ def create_db():
     }), 201
 
 
+# @admin_bp.get("/dbs")
+# @jwt_required()
+# def get_all_dbs():
+#     # Get current user
+#     current_user_id = get_jwt_identity()
+#     user = db.users.find_one({"_id": ObjectId(current_user_id)})
+
+#     if not user:
+#         return jsonify({
+#             "message": "User not found",
+#             "statusCode": 404,
+#             "data": {}
+#         }), 404
+
+#     # If user is admin, return all databases
+#     if user.get("role") == Role.admin.value:
+#         dbs = list(db.dbs.find())
+#     else:
+#         # For non-admin users, filter databases based on allowed_dbs
+#         allowed_db_ids = user.get("allowed_dbs", [])
+#         if allowed_db_ids:
+#             object_ids = [ObjectId(db_id) for db_id in allowed_db_ids]
+#             dbs = list(db.dbs.find({"_id": {"$in": object_ids}}))
+#         else:
+#             dbs = []
+
+#     clean_dbs = []
+#     for item in dbs:
+#         clean_dbs.append(
+#             CreateDBSchema(**item).dict(
+#                 exclude={"created_at"},
+#                 by_alias=False
+#             )
+#         )
+
+#     return jsonify({
+#         "message": "Database fetched successfully",
+#         "statusCode": 200,
+#         "data": clean_dbs
+#     }), 200
+
+from math import ceil
+from flask import request, jsonify
+from bson import ObjectId
+
 @admin_bp.get("/dbs")
 @jwt_required()
-def get_all_dbs():
-    # Get current user
+def get_all_dbs_paginated():
     current_user_id = get_jwt_identity()
     user = db.users.find_one({"_id": ObjectId(current_user_id)})
 
@@ -335,17 +464,57 @@ def get_all_dbs():
             "data": {}
         }), 404
 
-    # If user is admin, return all databases
-    if user.get("role") == Role.admin.value:
-        dbs = list(db.dbs.find())
-    else:
-        # For non-admin users, filter databases based on allowed_dbs
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 10))
+    search = request.args.get("search", "")
+
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 10
+
+    skip = (page - 1) * limit
+
+    # Build query
+    query = {}
+
+    if user.get("role") != Role.admin.value:
         allowed_db_ids = user.get("allowed_dbs", [])
         if allowed_db_ids:
             object_ids = [ObjectId(db_id) for db_id in allowed_db_ids]
-            dbs = list(db.dbs.find({"_id": {"$in": object_ids}}))
+            query["_id"] = {"$in": object_ids}
         else:
-            dbs = []
+            # No allowed DBs for this user
+            total = 0
+            return jsonify({
+                "message": "Databases fetched successfully",
+                "statusCode": 200,
+                "data": {
+                    "data": [],
+                    "meta": {
+                        "total": 0,
+                        "page": page,
+                        "limit": limit,
+                        "pageCount": 1,
+                        "hasNextPage": False,
+                        "hasPrevPage": False
+                    }
+                }
+            }), 200
+
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"short_code": {"$regex": search, "$options": "i"}}
+        ]
+
+    total = db.dbs.count_documents(query)
+
+    dbs = list(
+        db.dbs.find(query)
+        .skip(skip)
+        .limit(limit)
+    )
 
     clean_dbs = []
     for item in dbs:
@@ -356,11 +525,25 @@ def get_all_dbs():
             )
         )
 
+    page_count = ceil(total / limit) if total else 1
+    pagination = {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pageCount": page_count,
+        "hasNextPage": page < page_count,
+        "hasPrevPage": page > 1
+    }
+
     return jsonify({
-        "message": "Database fetched successfully",
+        "message": "Databases fetched successfully",
         "statusCode": 200,
-        "data": clean_dbs
+        "data": {
+            "data": clean_dbs,
+            "meta": pagination
+        }
     }), 200
+
 
 
 @admin_bp.patch("/dbs/<dbId>")

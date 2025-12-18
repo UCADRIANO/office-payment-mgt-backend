@@ -1,10 +1,10 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt, get_jwt_identity
-from core.security import hash_password
-from models.personnel import Personnel
+from flask_jwt_extended import jwt_required
+from models.personnel import Personnel, PersonnelStatus
 from pydantic import ValidationError
 from core.db import db
 from bson import ObjectId, errors
+from math import ceil
 
 personnel_bp = Blueprint("personnels", __name__)
 
@@ -35,6 +35,7 @@ def create_personnel():
         }), 400
 
     try:
+        data["status"] = PersonnelStatus.ACTIVE
         personnel_schema = Personnel(**data)
     except ValidationError as e:
         return jsonify({"message": e.errors(), "statusCode": 400}), 400
@@ -153,8 +154,6 @@ def update_personnel(personnelId):
     except ValidationError as e:
         return jsonify({"message": e.errors(), "statusCode": 400}), 400
 
-    print(f"------ Updated schema -------, {updated_schema}")
-
     payload = updated_schema.dict(by_alias=True)
     payload.pop("_id", None) 
     payload.pop("id", None) 
@@ -189,20 +188,83 @@ def delete_personnel(personnelId):
     }), 200
 
 
+# @personnel_bp.get("/db/<db_id>")
+# @jwt_required()
+# def get_personnel_by_db(db_id):
+#     personnel_list = list(db.personnels.find({"db_id": db_id}))
+
+#     clean_personnel = [
+#         Personnel(**item).dict(exclude={"created_at"}, by_alias=False)
+#         for item in personnel_list
+#     ]
+
+#     return jsonify({
+#         "message": "Personnel fetched successfully",
+#         "statusCode": 200,
+#         "data": clean_personnel
+#     }), 200
+
 @personnel_bp.get("/db/<db_id>")
 @jwt_required()
 def get_personnel_by_db(db_id):
-    personnel_list = list(db.personnels.find({"db_id": db_id}))
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 10))
+    search = request.args.get("search")
 
-    clean_personnel = [
-        Personnel(**item).dict(exclude={"created_at"}, by_alias=False)
-        for item in personnel_list
-    ]
+    if page < 1:
+        page = 1
+    if limit < 1:
+        limit = 10
+
+    skip = (page - 1) * limit
+
+    query = {}
+
+    if db_id:
+        query["db_id"] = db_id
+
+    if search:
+        query["$or"] = [
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"middle_name": {"$regex": search, "$options": "i"}},
+            {"army_number": {"$regex": search, "$options": "i"}},
+        ]
+
+    total = db.personnels.count_documents(query)
+
+    personnels = list(
+        db.personnels
+        .find(query)
+        .skip(skip)
+        .limit(limit)
+    )
+
+    formatted_personnels = []
+    for p in personnels:
+        p_formatted = p.copy()
+        p_formatted["id"] = str(p_formatted.pop("_id"))
+        p_formatted.pop("db_id", None)
+        formatted_personnels.append(p_formatted)
+
+    page_count = ceil(total / limit) if total else 1
+
+    pagination = {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pageCount": page_count,
+        "hasNextPage": page < page_count,
+        "hasPrevPage": page > 1
+    }
 
     return jsonify({
-        "message": "Personnel fetched successfully",
+        "message": "Personnels fetched successfully",
         "statusCode": 200,
-        "data": clean_personnel
+        "data": {
+            "data": formatted_personnels,
+            "meta": pagination
+        },
     }), 200
 
 
@@ -278,3 +340,54 @@ def bulk_personnel_upload():
             "failed": errors
         }
     }), 207 if errors else 201
+
+
+@personnel_bp.delete("/bulk-delete")
+@jwt_required()
+def bulk_delete_personnel():
+    data = request.get_json()
+
+    if not data or "personnels_id" not in data:
+        return jsonify({
+            "message": "personnels_id is required",
+            "statusCode": 400
+        }), 400
+
+    personnels_id = data["personnels_id"]
+
+    if not isinstance(personnels_id, list) or not personnels_id:
+        return jsonify({
+            "message": "personnels_id must be a non-empty list",
+            "statusCode": 400
+        }), 400
+
+    object_ids = []
+    invalid_ids = []
+
+    for pid in personnels_id:
+        try:
+            object_ids.append(ObjectId(pid))
+        except Exception:
+            invalid_ids.append(pid)
+
+    if invalid_ids:
+        return jsonify({
+            "message": "Invalid personnel ID(s)",
+            "invalid_ids": invalid_ids,
+            "statusCode": 400
+        }), 400
+
+    result = db.personnels.delete_many({
+        "_id": {"$in": object_ids}
+    })
+
+    if result.deleted_count == 0:
+        return jsonify({
+            "message": "No personnels found to delete",
+            "statusCode": 404
+        }), 404
+
+    return jsonify({
+        "message": "Personnels deleted successfully",
+        "statusCode": 200
+    }), 200
