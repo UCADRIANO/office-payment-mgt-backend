@@ -56,7 +56,9 @@ def create_personnel():
 def get_all_personnels():
     db_id = request.args.get("db_id")
 
-    query = {}
+    query = {
+        "$or": [{"isDeleted": False}, {"isDeleted": {"$exists": False}}]
+    }
     if db_id:
         query["db_id"] = db_id
 
@@ -180,29 +182,13 @@ def delete_personnel(personnelId):
     if not personnel:
         return jsonify({"message": "Personnel not found", "statusCode": 404}), 404
 
-    db.personnels.delete_one({"_id": obj_id})
+    db.personnels.update_one({"_id": obj_id}, {"$set": {"isDeleted": True}})
 
     return jsonify({
         "message": "Personnel deleted successfully",
         "statusCode": 200
     }), 200
 
-
-# @personnel_bp.get("/db/<db_id>")
-# @jwt_required()
-# def get_personnel_by_db(db_id):
-#     personnel_list = list(db.personnels.find({"db_id": db_id}))
-
-#     clean_personnel = [
-#         Personnel(**item).dict(exclude={"created_at"}, by_alias=False)
-#         for item in personnel_list
-#     ]
-
-#     return jsonify({
-#         "message": "Personnel fetched successfully",
-#         "statusCode": 200,
-#         "data": clean_personnel
-#     }), 200
 
 @personnel_bp.get("/db/<db_id>")
 @jwt_required()
@@ -218,7 +204,9 @@ def get_personnel_by_db(db_id):
 
     skip = (page - 1) * limit
 
-    query = {}
+    query = {
+        "$or": [{"isDeleted": False}, {"isDeleted": {"$exists": False}}]
+    }
 
     if db_id:
         query["db_id"] = db_id
@@ -377,11 +365,12 @@ def bulk_delete_personnel():
             "statusCode": 400
         }), 400
 
-    result = db.personnels.delete_many({
-        "_id": {"$in": object_ids}
-    })
+    result = db.personnels.update_many(
+        {"_id": {"$in": object_ids}},
+        {"$set": {"isDeleted": True}}
+    )
 
-    if result.deleted_count == 0:
+    if result.matched_count == 0:
         return jsonify({
             "message": "No personnels found to delete",
             "statusCode": 404

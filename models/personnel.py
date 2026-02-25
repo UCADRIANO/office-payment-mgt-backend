@@ -17,6 +17,11 @@ class CreateDBSchema(BaseMongoModel):
 class PersonnelStatus(str, Enum):
     ACTIVE = "active"
     INACTIVE = "inactive"
+    AWOL = "awol"
+    DEATH = "death"
+    RTU = "rtu"
+    POSTED = "posted"
+    CSE = "cse"
 
 
 class Personnel(BaseMongoModel):
@@ -34,6 +39,7 @@ class Personnel(BaseMongoModel):
     db_id: str 
 
     status: PersonnelStatus = Field(default=PersonnelStatus.ACTIVE)
+    isDeleted: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
