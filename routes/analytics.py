@@ -118,43 +118,36 @@ def get_personnel_analytics_by_db(db_id):
 
     query_base = {"db_id": str(db_obj_id)}
 
-    # --- TOTAL PERSONNEL ---
-    total_personnel = db.personnels.count_documents(query_base)
-    personnel_this_month = db.personnels.count_documents({
-        **query_base,
-        "created_at": {"$gte": first_day_this_month}
-    })
-    personnel_prev_month = db.personnels.count_documents({
-        **query_base,
-        "created_at": {"$gte": first_day_prev_month, "$lte": last_day_prev_month}
-    })
-    total_pct = percentage_increase(personnel_this_month, personnel_prev_month)
+    def count_by_query(query):
+        """Returns (total, pct) for a given query."""
+        total = db.personnels.count_documents(query)
+        this_month = db.personnels.count_documents({
+            **query, "created_at": {"$gte": first_day_this_month}
+        })
+        prev_month = db.personnels.count_documents({
+            **query,
+            "created_at": {"$gte": first_day_prev_month, "$lte": last_day_prev_month}
+        })
+        return total, percentage_increase(this_month, prev_month)
 
-    # --- ACTIVE PERSONNEL ---
-    active_query = {**query_base, "status": "active"}
-    total_active = db.personnels.count_documents(active_query)
-    active_this_month = db.personnels.count_documents({
-        **active_query,
-        "created_at": {"$gte": first_day_this_month}
-    })
-    active_prev_month = db.personnels.count_documents({
-        **active_query,
-        "created_at": {"$gte": first_day_prev_month, "$lte": last_day_prev_month}
-    })
-    active_pct = percentage_increase(active_this_month, active_prev_month)
+    # --- TOTAL PERSONNEL (exclude soft-deleted) ---
+    not_deleted_query = {
+        **query_base,
+        "$or": [{"isDeleted": False}, {"isDeleted": {"$exists": False}}]
+    }
+    total_personnel, total_pct = count_by_query(not_deleted_query)
 
-    # --- INACTIVE PERSONNEL ---
-    inactive_query = {**query_base, "status": "inactive"}
-    total_inactive = db.personnels.count_documents(inactive_query)
-    inactive_this_month = db.personnels.count_documents({
-        **inactive_query,
-        "created_at": {"$gte": first_day_this_month}
-    })
-    inactive_prev_month = db.personnels.count_documents({
-        **inactive_query,
-        "created_at": {"$gte": first_day_prev_month, "$lte": last_day_prev_month}
-    })
-    inactive_pct = percentage_increase(inactive_this_month, inactive_prev_month)
+    # --- BY STATUS ---
+    active_total, active_pct = count_by_query({**query_base, "status": "active"})
+    inactive_total, inactive_pct = count_by_query({**query_base, "status": "inactive"})
+    awol_total, awol_pct = count_by_query({**query_base, "status": "awol"})
+    death_total, death_pct = count_by_query({**query_base, "status": "death"})
+    rtu_total, rtu_pct = count_by_query({**query_base, "status": "rtu"})
+    posted_total, posted_pct = count_by_query({**query_base, "status": "posted"})
+    cse_total, cse_pct = count_by_query({**query_base, "status": "cse"})
+
+    # --- DELETED PERSONNEL ---
+    deleted_total, deleted_pct = count_by_query({**query_base, "isDeleted": True})
 
     return jsonify({
         "message": "Personnel analytics fetched successfully",
@@ -165,12 +158,36 @@ def get_personnel_analytics_by_db(db_id):
                 "percentage_increase": total_pct
             },
             "total_active_personnel": {
-                "total": total_active,
+                "total": active_total,
                 "percentage_increase": active_pct
             },
             "total_inactive_personnel": {
-                "total": total_inactive,
+                "total": inactive_total,
                 "percentage_increase": inactive_pct
+            },
+            "total_awol_personnel": {
+                "total": awol_total,
+                "percentage_increase": awol_pct
+            },
+            "total_death_personnel": {
+                "total": death_total,
+                "percentage_increase": death_pct
+            },
+            "total_rtu_personnel": {
+                "total": rtu_total,
+                "percentage_increase": rtu_pct
+            },
+            "total_posted_personnel": {
+                "total": posted_total,
+                "percentage_increase": posted_pct
+            },
+            "total_cse_personnel": {
+                "total": cse_total,
+                "percentage_increase": cse_pct
+            },
+            "total_deleted_personnel": {
+                "total": deleted_total,
+                "percentage_increase": deleted_pct
             }
         }
     }), 200
