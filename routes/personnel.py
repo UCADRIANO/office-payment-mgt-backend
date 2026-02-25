@@ -196,6 +196,7 @@ def get_personnel_by_db(db_id):
     page = int(request.args.get("page", 1))
     limit = int(request.args.get("limit", 10))
     search = request.args.get("search")
+    status_filter = request.args.get("filter")
 
     if page < 1:
         page = 1
@@ -204,20 +205,36 @@ def get_personnel_by_db(db_id):
 
     skip = (page - 1) * limit
 
-    query = {
-        "$or": [{"isDeleted": False}, {"isDeleted": {"$exists": False}}]
-    }
+    # Build query using $and to safely combine conditions
+    conditions = [
+        {"$or": [{"isDeleted": False}, {"isDeleted": {"$exists": False}}]}
+    ]
 
     if db_id:
-        query["db_id"] = db_id
+        conditions.append({"db_id": db_id})
 
     if search:
-        query["$or"] = [
-            {"first_name": {"$regex": search, "$options": "i"}},
-            {"last_name": {"$regex": search, "$options": "i"}},
-            {"middle_name": {"$regex": search, "$options": "i"}},
-            {"army_number": {"$regex": search, "$options": "i"}},
-        ]
+        conditions.append({
+            "$or": [
+                {"first_name": {"$regex": search, "$options": "i"}},
+                {"last_name": {"$regex": search, "$options": "i"}},
+                {"middle_name": {"$regex": search, "$options": "i"}},
+                {"army_number": {"$regex": search, "$options": "i"}},
+            ]
+        })
+
+    # Apply status filter if provided and not "all"
+    if status_filter and status_filter.lower() != "all":
+        valid_statuses = [s.value for s in PersonnelStatus]
+        if status_filter.lower() in valid_statuses:
+            conditions.append({"status": status_filter.lower()})
+        else:
+            return jsonify({
+                "message": f"Invalid filter value. Must be one of: all, {', '.join(valid_statuses)}",
+                "statusCode": 400
+            }), 400
+
+    query = {"$and": conditions}
 
     total = db.personnels.count_documents(query)
 

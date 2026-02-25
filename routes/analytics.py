@@ -33,13 +33,24 @@ def get_dashboard_analytics():
     })
     users_pct = calculate_percentage(users_this_month, users_prev_month)
 
-    # --- PERSONNELS ---
-    total_personnel = db.personnels.count_documents({})
-    personnel_this_month = db.personnels.count_documents({"created_at": {"$gte": first_day_this_month}})
+    # --- PERSONNELS (exclude soft-deleted) ---
+    not_deleted_query = {"$or": [{"isDeleted": False}, {"isDeleted": {"$exists": False}}]}
+    total_personnel = db.personnels.count_documents(not_deleted_query)
+    personnel_this_month = db.personnels.count_documents({**not_deleted_query, "created_at": {"$gte": first_day_this_month}})
     personnel_prev_month = db.personnels.count_documents({
+        **not_deleted_query,
         "created_at": {"$gte": first_day_prev_month, "$lte": last_day_prev_month}
     })
     personnel_pct = calculate_percentage(personnel_this_month, personnel_prev_month)
+
+    # --- DELETED PERSONNEL ---
+    total_deleted = db.personnels.count_documents({"isDeleted": True})
+    deleted_this_month = db.personnels.count_documents({"isDeleted": True, "created_at": {"$gte": first_day_this_month}})
+    deleted_prev_month = db.personnels.count_documents({
+        "isDeleted": True,
+        "created_at": {"$gte": first_day_prev_month, "$lte": last_day_prev_month}
+    })
+    deleted_pct = calculate_percentage(deleted_this_month, deleted_prev_month)
 
     # --- NEW PERSONNEL (added this month) ---
     new_personnel = personnel_this_month
@@ -65,6 +76,10 @@ def get_dashboard_analytics():
             "personnel": {
                 "total": total_personnel,
                 "percentage_increase": personnel_pct
+            },
+            "deleted_personnel": {
+                "total": total_deleted,
+                "percentage_increase": deleted_pct
             },
             "new_personnel": {
                 "total": new_personnel,
